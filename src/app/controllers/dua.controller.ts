@@ -82,15 +82,17 @@ duaRoutes.post("/get-dua", optionalVerifyToken, async (req: Request, res: Respon
     const translationRes = await axios.get(
       `https://api.alquran.cloud/v1/ayah/${surah_number}:${ayah_number}/en.asad`
     );
-
+        const bnTranslationRes = await axios.get(
+      `https://api.alquran.cloud/v1/ayah/${surah_number}:${ayah_number}/bn.bengali`
+    );
     const arabicData = arabicRes.data.data;
     const translationData = translationRes.data.data;
-
     const dua = {
       surah_name: arabicData.surah.englishName || `Surah ${surah_number}`,
       ayah_number: ayah_number.toString(),
       arabic: arabicData.text || "",
       translation: translationData.text || "",
+      bnTranslation: bnTranslationRes.data.data.text,
       short_explanation:
         "এই আয়াতে আল্লাহ মানুষকে সান্ত্বনা দেন ও সঠিক পথে উৎসাহ দেন।",
     };
