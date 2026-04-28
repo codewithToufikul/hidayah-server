@@ -19,27 +19,33 @@ const isValidQuranRef = (surah: number, ayah: number): boolean =>
   surah >= 1 && surah <= 114 && ayah >= 1 && ayah <= 300;
 
 /** Build a rich, role-specific prompt */
-const buildPrompt = (emotion: string): string =>
-  `You are an expert Islamic scholar with deep Quranic knowledge.
+const buildPrompt = (emotion: string): string => {
+  const isPositive = /happy|good|great|grateful|thankful|blessed|success|joy|excited|peaceful/i.test(emotion);
+  
+  return `You are an expert Islamic scholar with deep Quranic and Hadith knowledge.
 A Muslim is experiencing the following feeling: "${emotion}"
 
-Choose the SINGLE most relevant and comforting Quranic verse for this exact feeling.
-Think carefully about the emotional depth — then respond ONLY with a valid JSON object
-containing exactly three keys:
-  "surah_number" : integer (1-114)
-  "ayah_number"  : integer
-  "reason"       : one concise English sentence explaining why this verse helps with "${emotion}"
-  "masnoon_dua_arabic" : A relevant Dua (supplication) from Sunnah/Hadith in Arabic
-  "masnoon_dua_english": English translation of the Masnoon Dua
+TASK:
+1. Identify the emotional category: Is it positive (happiness/gratitude), negative (sadness/anxiety/hardship), or seeking (guidance/knowledge)?
+2. Choose the SINGLE most relevant and beautiful Quranic verse for this exact feeling.
+   - If positive: Choose verses of Shukr (gratitude) or Allah's blessings (e.g., Surah Ar-Rahman, Surah Ibrahim:7, etc.).
+   - If negative: Choose verses of Sabr (patience), hope, or comfort (e.g., Surah Ash-Sharh, Surah Ad-Duhaa, Surah Al-Baqarah:286, etc.).
+   - Avoid repeating Surah 94:5 or 93:5 unless specifically appropriate for hardship. 
+3. Choose a highly relevant Masnoon Dua (from Sunnah/Hadith) that matches the feeling.
+   - For gratitude: Use "Alhamdulillah" variants or Shukur duas.
+   - For anxiety: Use "Allahumma inni a'udhu bika minal hammi..." etc.
 
-Example: {
-  "surah_number": 94,
-  "ayah_number": 5,
-  "reason": "Promises relief after hardship, directly comforting a sad heart.",
-  "masnoon_dua_arabic": "اللَّهُمَّ إِنِّي أَعُوذُ بِكَ مِنَ الْهَمِّ وَالْحَزَنِ",
-  "masnoon_dua_english": "O Allah, I seek refuge in You from anxiety and sorrow."
+Respond ONLY with a valid JSON object containing exactly these keys:
+{
+  "surah_number": integer (1-114),
+  "ayah_number": integer,
+  "reason": "One concise sentence in English explaining why this verse perfectly addresses the feeling '${emotion}'",
+  "masnoon_dua_arabic": "Arabic text of the Sunnah Dua",
+  "masnoon_dua_english": "English translation of the Sunnah Dua"
 }
+
 No markdown, no extra text. Pure JSON only.`.trim();
+};
 
 // ─── AI call with retry ───────────────────────────────────────────────────────
 
@@ -53,67 +59,68 @@ interface AIResult {
 
 const getAIResult = async (emotion: string, retries = 2): Promise<AIResult> => {
   for (let attempt = 0; attempt <= retries; attempt++) {
-    const response = await axios.post(
-      "https://router.huggingface.co/v1/chat/completions",
-      {
-        model: "meta-llama/Llama-3.1-8B-Instruct:novita", // ✅ confirmed working
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are an expert Islamic scholar. Respond ONLY with a valid JSON object. No markdown, no extra text.",
-          },
-          { role: "user", content: buildPrompt(emotion) },
-        ],
-        temperature: 0.25,
-        max_tokens: 200,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.HF_API_KEY}`,
-          "Content-Type": "application/json",
+    try {
+      const response = await axios.post(
+        "https://router.huggingface.co/v1/chat/completions",
+        {
+          model: "meta-llama/Llama-3.1-8B-Instruct:novita",
+          messages: [
+            {
+              role: "system",
+              content: "You are an expert Islamic scholar. You respond only in valid JSON. No preamble, no markdown.",
+            },
+            { role: "user", content: buildPrompt(emotion) },
+          ],
+          temperature: 0.4, // Slightly higher for diversity
+          max_tokens: 300,
         },
-      }
-    );
-
-    const raw: string = response.data.choices[0]?.message?.content ?? "";
-
-    // Try direct parse, then regex extraction
-    const tryParse = (str: string): AIResult | null => {
-      try {
-        const parsed = JSON.parse(str);
-        if (
-          typeof parsed.surah_number === "number" &&
-          typeof parsed.ayah_number === "number" &&
-          isValidQuranRef(parsed.surah_number, parsed.ayah_number) &&
-          parsed.masnoon_dua_arabic &&
-          parsed.masnoon_dua_english
-        ) {
-          return parsed as AIResult;
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.HF_API_KEY}`,
+            "Content-Type": "application/json",
+          },
         }
-      } catch {
-        /* ignore */
-      }
-      return null;
-    };
-
-    const direct = tryParse(raw);
-    if (direct) return direct;
-
-    const match = raw.match(/\{[\s\S]*?\}/);
-    if (match) {
-      const extracted = tryParse(match[0]);
-      if (extracted) return extracted;
-    }
-
-    if (attempt === retries) {
-      throw new Error(
-        "AI failed to return a valid Quran reference after retries."
       );
+
+      const raw: string = response.data.choices[0]?.message?.content ?? "";
+      
+      // Attempt to clean up the response if it contains markdown code blocks
+      const cleanJson = raw.replace(/```json|```/g, "").trim();
+
+      const tryParse = (str: string): AIResult | null => {
+        try {
+          const parsed = JSON.parse(str);
+          if (
+            typeof parsed.surah_number === "number" &&
+            typeof parsed.ayah_number === "number" &&
+            isValidQuranRef(parsed.surah_number, parsed.ayah_number) &&
+            parsed.masnoon_dua_arabic &&
+            parsed.masnoon_dua_english
+          ) {
+            return parsed as AIResult;
+          }
+        } catch {
+          return null;
+        }
+        return null;
+      };
+
+      const parsed = tryParse(cleanJson);
+      if (parsed) return parsed;
+
+      // Regex fallback for stubborn models
+      const match = cleanJson.match(/\{[\s\S]*?\}/);
+      if (match) {
+        const extracted = tryParse(match[0]);
+        if (extracted) return extracted;
+      }
+    } catch (error: any) {
+      console.error(`AI Attempt ${attempt} failed:`, error.message);
+      if (attempt === retries) throw error;
     }
   }
 
-  throw new Error("Unexpected error in AI response loop.");
+  throw new Error("Failed to get valid AI response after retries.");
 };
 
 // ─── POST /dua/get-dua ───────────────────────────────────────────────────────

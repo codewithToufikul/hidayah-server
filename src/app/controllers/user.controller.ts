@@ -74,17 +74,31 @@ userRoutes.post("/login", async (req: Request, res: Response) => {
 });
 
 
-userRoutes.get("/profile", verifyToken, async (req: Request, res: Response) => {
+userRoutes.put("/profile", verifyToken, async (req: Request, res: Response) => {
   try {
-    const userId = (req as any).userId; // 🛠 cast to any
-    const user = await User.findById(userId).select("-password");
+    const userId = (req as any).userId;
+    const { name, email } = req.body;
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { name, email },
+      { new: true }
+    ).select("-password");
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    res.json({ user });
-  } catch (error) {
-    res.status(500).json({ message: "Server error" });
+    res.json({ 
+      success: true, 
+      message: "Profile updated successfully",
+      user 
+    });
+  } catch (error: any) {
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to update profile",
+      error: error.message 
+    });
   }
 });
