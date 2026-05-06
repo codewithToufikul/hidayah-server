@@ -11,6 +11,7 @@ const DuaHistorySchema = new Schema({
   short_explanation: { type: String },
   masnoon_dua_arabic: { type: String },
   masnoon_dua_english: { type: String },
+  source:            { type: String },
   createdAt:         { type: Date, default: Date.now },
 });
 

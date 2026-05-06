@@ -45,7 +45,8 @@ Respond ONLY with this JSON structure:
   "ayah_number": integer,
   "reason": "One concise sentence in English explaining why this verse addresses the feeling",
   "masnoon_dua_arabic": "Arabic text",
-  "masnoon_dua_english": "English translation"
+  "masnoon_dua_english": "English translation",
+  "source": "A valid Islamic source (e.g., Tafsir Ibn Kathir, Sahih Bukhari)"
 }
 
 Pure JSON only. No preamble.`.trim();
@@ -60,6 +61,7 @@ interface AIResult {
   reason: string;
   masnoon_dua_arabic: string;
   masnoon_dua_english: string;
+  source?: string;
 }
 
 const getAIResult = async (emotion: string, retries = 2): Promise<AIResult> => {
@@ -113,7 +115,10 @@ const getAIResult = async (emotion: string, retries = 2): Promise<AIResult> => {
         const cat = parsed.detected_category.toLowerCase();
         if (curatedDuas[cat]) {
           console.log(`Emotion Detected: ${cat} (Mapped from: "${emotion}")`);
-          return { ...curatedDuas[cat], detected_category: cat };
+          return { 
+            ...curatedDuas[cat], 
+            detected_category: cat 
+          };
         }
         
         // If 'other', return what AI found but ensure it has required fields
@@ -154,7 +159,8 @@ duaRoutes.post(
         ayah_number, 
         reason, 
         masnoon_dua_arabic, 
-        masnoon_dua_english 
+        masnoon_dua_english,
+        source
       } = await getAIResult(emotion);
 
       // 2️⃣ Fetch Arabic & English in parallel
@@ -180,6 +186,7 @@ duaRoutes.post(
         short_explanation: reason,
         masnoon_dua_arabic,
         masnoon_dua_english,
+        source: source || "Islamic Scholar"
       };
 
       // 3️⃣ Persist to history only for authenticated users
@@ -195,6 +202,7 @@ duaRoutes.post(
           short_explanation: dua.short_explanation,
           masnoon_dua_arabic: dua.masnoon_dua_arabic,
           masnoon_dua_english: dua.masnoon_dua_english,
+          source: dua.source
         });
       }
 
