@@ -4,7 +4,7 @@ import app from './app';
 
 let server: Server;
 
-const PORT = 10000;
+const PORT = process.env.PORT || 10000;
 
 async function main() {
     try {
