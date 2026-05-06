@@ -8,6 +8,8 @@ import { verifyToken } from "../middleware/verifytoken";
 dotenv.config();
 export const duaRoutes = express.Router();
 
+import { curatedDuas } from "../data/curatedDuas";
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /** Trim & lowercase the user's emotion input */
@@ -20,36 +22,39 @@ const isValidQuranRef = (surah: number, ayah: number): boolean =>
 
 /** Build a rich, role-specific prompt */
 const buildPrompt = (emotion: string): string => {
-  const isPositive = /happy|good|great|grateful|thankful|blessed|success|joy|excited|peaceful/i.test(emotion);
+  const categories = Object.keys(curatedDuas).join(", ");
   
-  return `You are an expert Islamic scholar with deep Quranic and Hadith knowledge.
-A Muslim is experiencing the following feeling: "${emotion}"
+  return `You are an expert Islamic Psychologist and Scholar. 
+USER INPUT: "${emotion}"
 
 TASK:
-1. Identify the emotional category: Is it positive (happiness/gratitude), negative (sadness/anxiety/hardship), or seeking (guidance/knowledge)?
-2. Choose the SINGLE most relevant and beautiful Quranic verse for this exact feeling.
-   - If positive: Choose verses of Shukr (gratitude) or Allah's blessings (e.g., Surah Ar-Rahman, Surah Ibrahim:7, etc.).
-   - If negative: Choose verses of Sabr (patience), hope, or comfort (e.g., Surah Ash-Sharh, Surah Ad-Duhaa, Surah Al-Baqarah:286, etc.).
-   - Avoid repeating Surah 94:5 or 93:5 unless specifically appropriate for hardship. 
-3. Choose a highly relevant Masnoon Dua (from Sunnah/Hadith) that matches the feeling.
-   - For gratitude: Use "Alhamdulillah" variants or Shukur duas.
-   - For anxiety: Use "Allahumma inni a'udhu bika minal hammi..." etc.
+1. Analyze the USER INPUT deeply to understand the underlying emotion.
+2. Map this emotion to the BEST FIT from these specific categories: [${categories}].
+   - Example: "I feel lost" -> 'confused'
+   - Example: "Life is hard" -> 'tired'
+   - Example: "I did something wrong" -> 'guilty'
+3. If it absolutely doesn't fit any of the above, label it as 'other'.
+4. If the category is 'other', you MUST provide a HIGHLY AUTHENTIC Quranic verse (Surah and Ayah number) and a valid Masnoon Dua in Arabic. 
+   - DO NOT hallucinate. 
+   - Arabic must be perfectly formatted.
 
-Respond ONLY with a valid JSON object containing exactly these keys:
+Respond ONLY with this JSON structure:
 {
-  "surah_number": integer (1-114),
+  "detected_category": "the category name or 'other'",
+  "surah_number": integer,
   "ayah_number": integer,
-  "reason": "One concise sentence in English explaining why this verse perfectly addresses the feeling '${emotion}'",
-  "masnoon_dua_arabic": "Arabic text of the Sunnah Dua",
-  "masnoon_dua_english": "English translation of the Sunnah Dua"
+  "reason": "One concise sentence in English explaining why this verse addresses the feeling",
+  "masnoon_dua_arabic": "Arabic text",
+  "masnoon_dua_english": "English translation"
 }
 
-No markdown, no extra text. Pure JSON only.`.trim();
+Pure JSON only. No preamble.`.trim();
 };
 
 // ─── AI call with retry ───────────────────────────────────────────────────────
 
 interface AIResult {
+  detected_category: string;
   surah_number: number;
   ayah_number: number;
   reason: string;
@@ -67,12 +72,12 @@ const getAIResult = async (emotion: string, retries = 2): Promise<AIResult> => {
           messages: [
             {
               role: "system",
-              content: "You are an expert Islamic scholar. You respond only in valid JSON. No preamble, no markdown.",
+              content: "You are a specialized Emotion Classifier and Islamic Scholar. Your job is to map human feelings to Quranic guidance accurately. Always return valid JSON.",
             },
             { role: "user", content: buildPrompt(emotion) },
           ],
-          temperature: 0.4, // Slightly higher for diversity
-          max_tokens: 300,
+          temperature: 0.1, // Very low for strict classification
+          max_tokens: 400,
         },
         {
           headers: {
@@ -83,19 +88,15 @@ const getAIResult = async (emotion: string, retries = 2): Promise<AIResult> => {
       );
 
       const raw: string = response.data.choices[0]?.message?.content ?? "";
-      
-      // Attempt to clean up the response if it contains markdown code blocks
       const cleanJson = raw.replace(/```json|```/g, "").trim();
 
       const tryParse = (str: string): AIResult | null => {
         try {
           const parsed = JSON.parse(str);
           if (
+            parsed.detected_category &&
             typeof parsed.surah_number === "number" &&
-            typeof parsed.ayah_number === "number" &&
-            isValidQuranRef(parsed.surah_number, parsed.ayah_number) &&
-            parsed.masnoon_dua_arabic &&
-            parsed.masnoon_dua_english
+            typeof parsed.ayah_number === "number"
           ) {
             return parsed as AIResult;
           }
@@ -106,21 +107,25 @@ const getAIResult = async (emotion: string, retries = 2): Promise<AIResult> => {
       };
 
       const parsed = tryParse(cleanJson);
-      if (parsed) return parsed;
-
-      // Regex fallback for stubborn models
-      const match = cleanJson.match(/\{[\s\S]*?\}/);
-      if (match) {
-        const extracted = tryParse(match[0]);
-        if (extracted) return extracted;
+      if (parsed) {
+        // 🚀 AUTO EMOTION DETECTION CORE LOGIC:
+        // If AI detected one of our curated categories, FORCE use of curated data
+        const cat = parsed.detected_category.toLowerCase();
+        if (curatedDuas[cat]) {
+          console.log(`Emotion Detected: ${cat} (Mapped from: "${emotion}")`);
+          return { ...curatedDuas[cat], detected_category: cat };
+        }
+        
+        // If 'other', return what AI found but ensure it has required fields
+        return parsed;
       }
     } catch (error: any) {
-      console.error(`AI Attempt ${attempt} failed:`, error.message);
+      console.error(`Detection Attempt ${attempt} failed:`, error.message);
       if (attempt === retries) throw error;
     }
   }
 
-  throw new Error("Failed to get valid AI response after retries.");
+  throw new Error("Failed to detect emotion accurately.");
 };
 
 // ─── POST /dua/get-dua ───────────────────────────────────────────────────────
@@ -142,8 +147,9 @@ duaRoutes.post(
     const emotion = normalizeEmotion(rawEmotion);
 
     try {
-      // 1️⃣ Ask AI for the best verse + reason
+      // 1️⃣ Ask AI for the best verse + reason or use curated
       const { 
+        detected_category,
         surah_number, 
         ayah_number, 
         reason, 
@@ -164,6 +170,7 @@ duaRoutes.post(
       const arabicData = arabicRes.data.data;
 
       const dua = {
+        detected_category,
         surah_name:        arabicData.surah.englishName ?? `Surah ${surah_number}`,
         surah_name_arabic: arabicData.surah.name,
         surah_number,
